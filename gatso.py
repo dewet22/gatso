@@ -3,16 +3,58 @@
 
 import json
 import os
+import random
 import socket
 import threading
+import timeit
 from datetime import datetime
+from http.client import HTTPSConnection, HTTPConnection
+from urllib.error import URLError
+from urllib.parse import urlparse
 
 import gspread
 import speedtest_cli as st
 from oauth2client.client import SignedJwtAssertionCredentials
+from requests import HTTPError
 
 SHEET_KEY = '1Y7tAynFs-Mp7GnLaoUXs_tz33WdFQS8m-SbmMr1JlLU'
 SOCKET_TIMEOUT = 10  # seconds
+
+
+def getBestServer(servers, user_agent):
+    """Improves speedtest_cli.getBestServer to pick a random server from the 5 fastest ones instead."""
+
+    results = {}
+    for server in servers:
+        cum = []
+        url = '%s/latency.txt' % os.path.dirname(server['url'])
+        urlparts = urlparse(url)
+        for i in range(0, 3):
+            try:
+                if urlparts[0] == 'https':
+                    h = HTTPSConnection(urlparts[1])
+                else:
+                    h = HTTPConnection(urlparts[1])
+                headers = {'User-Agent': user_agent}
+                start = timeit.default_timer()
+                h.request("GET", urlparts[2], headers=headers)
+                r = h.getresponse()
+                total = (timeit.default_timer() - start)
+            except (HTTPError, URLError, socket.error):
+                cum.append(3600)
+                continue
+            text = r.read(9)
+            if int(r.status) == 200 and text == 'test=test'.encode():
+                cum.append(total)
+            else:
+                cum.append(3600)
+            h.close()
+        avg = round((sum(cum) / 6) * 1000, 3)
+        results[avg] = server
+    key = random.choice(sorted(results.keys())[:5])
+    best = results[key]
+    best['latency'] = key
+    return best
 
 
 def run_speedtest():
@@ -21,7 +63,7 @@ def run_speedtest():
     st.build_user_agent()
     config = st.getConfig()
     servers = st.closestServers(config['client'])
-    best = st.getBestServer(servers)
+    best = getBestServer(servers, st.build_user_agent())
     # print(best)
 
     urls = []
